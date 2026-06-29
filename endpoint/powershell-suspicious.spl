@@ -1,0 +1,39 @@
+| Comment =========================================================
+| Title:       Suspicious PowerShell Execution
+| Technique:   T1059.001 - PowerShell, T1027 - Obfuscation
+| Data Source: Windows Security Events / Sysmon (EventCode 1 / 4688)
+| Author:      Faizaan Sajjad
+| Notes:       Detects encoded commands, download cradles, and
+|              common obfuscation patterns. Tune allowlist for
+|              known management tools (SCCM, Intune, etc).
+| ================================================================
+
+index=wineventlog (EventCode=4688 OR EventCode=1)
+    (process_name="*powershell.exe" OR process_name="*pwsh.exe"
+     OR New_Process_Name="*powershell.exe" OR New_Process_Name="*pwsh.exe")
+| eval CommandLine=coalesce(CommandLine, Process_Command_Line)
+| eval ParentProcess=coalesce(ParentProcessName, Creator_Process_Name)
+| where isnotnull(CommandLine)
+
+| Comment --- Flag suspicious patterns ---
+| eval IsEncoded=if(match(lower(CommandLine),"-enc|-encodedcommand"), 1, 0)
+| eval HasIEX=if(match(lower(CommandLine),"iex|invoke-expression"), 1, 0)
+| eval HasDownload=if(match(lower(CommandLine),"downloadstring|net\.webclient|invoke-webrequest|wget|curl"), 1, 0)
+| eval HasReflection=if(match(lower(CommandLine),"reflection\.assembly|\[system\.reflection"), 1, 0)
+| eval HasBypass=if(match(lower(CommandLine),"-bypass|-nop|-windowstyle hidden|-exec bypass"), 1, 0)
+| eval HasBase64=if(match(CommandLine,"[A-Za-z0-9+/]{40,}={0,2}"), 1, 0)
+
+| eval RiskScore=IsEncoded+HasIEX+HasDownload+HasReflection+HasBypass+HasBase64
+| where RiskScore >= 2
+
+| eval RiskLevel=case(
+    RiskScore >= 4, "CRITICAL",
+    RiskScore >= 3, "HIGH",
+    RiskScore >= 2, "MEDIUM",
+    true(),         "LOW"
+  )
+
+| table _time, host, user, ParentProcess, CommandLine,
+        IsEncoded, HasIEX, HasDownload, HasBypass, HasBase64,
+        RiskScore, RiskLevel
+| sort - RiskScore

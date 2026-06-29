@@ -1,0 +1,41 @@
+| Comment =========================================================
+| Title:       DNS-Based Data Exfiltration Detection
+| Technique:   T1048.003 - Exfiltration Over Alternative Protocol: DNS
+| Data Source: DNS logs (Splunk Stream, Infoblox, Windows DNS Debug)
+| Author:      Faizaan Sajjad
+| Notes:       Two detection methods: long subdomain labels and
+|              high query volume to single external domain.
+| ================================================================
+
+| Comment --- Method 1: Long Subdomain Labels (encoded data) ---
+index=dns_logs
+| eval query_length=len(query)
+| where query_length > 100
+| rex field=query "^(?:[^.]+\.)*(?<root_domain>[^.]+\.[^.]+)$"
+| stats
+    count AS TotalQueries,
+    dc(query) AS UniqueQueries,
+    values(query) AS SampleQueries,
+    dc(src_ip) AS UniqueSources,
+    values(src_ip) AS Sources
+    by root_domain
+| where TotalQueries >= 20 OR UniqueQueries >= 10
+| eval AvgQueryLen=round(query_length,0)
+| eval DetectionMethod="Long Subdomain Label"
+| table root_domain, TotalQueries, UniqueQueries, UniqueSources, Sources, SampleQueries, DetectionMethod
+| sort - TotalQueries
+
+| Comment --- Method 2: High Query Volume to Single External Domain ---
+index=dns_logs
+| rex field=query "^(?:[^.]+\.)*(?<root_domain>[^.]+\.[^.]+)$"
+| where NOT match(root_domain,"microsoft\.com|windows\.com|office\.com|azure\.com|google\.com|amazonaws\.com")
+| bucket _time span=1h
+| stats
+    count AS TotalQueries,
+    dc(query) AS UniqueSubdomains,
+    values(src_ip) AS Sources
+    by root_domain, _time
+| where UniqueSubdomains >= 50
+| eval DetectionMethod="High Subdomain Volume"
+| table _time, root_domain, TotalQueries, UniqueSubdomains, Sources, DetectionMethod
+| sort - UniqueSubdomains

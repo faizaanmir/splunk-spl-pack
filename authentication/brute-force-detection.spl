@@ -1,0 +1,33 @@
+| Comment =========================================================
+| Title:       Brute Force Login Detection
+| Technique:   T1110 - Brute Force
+| Data Source: Windows Security Events / Linux auth logs
+| Author:      Faizaan Sajjad
+| Notes:       Covers both Windows (EventCode 4625) and Linux (sshd failures).
+|              Tune FailureThreshold per environment baseline.
+| ================================================================
+
+| Comment --- Windows Brute Force (single account, many attempts) ---
+index=wineventlog EventCode=4625
+| bucket _time span=5m
+| stats
+    count AS FailedAttempts,
+    dc(Account_Name) AS UniqueAccounts,
+    values(Account_Name) AS TargetAccounts,
+    earliest(_time) AS FirstSeen,
+    latest(_time) AS LastSeen
+    by src_ip, _time
+| where FailedAttempts >= 20 AND UniqueAccounts <= 2
+| eval Type="Brute Force (Windows)"
+| eval FirstSeen=strftime(FirstSeen,"%Y-%m-%d %H:%M:%S")
+| eval LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| table _time, Type, src_ip, FailedAttempts, UniqueAccounts, TargetAccounts, FirstSeen, LastSeen
+| sort - FailedAttempts
+
+| Comment --- Linux SSH Brute Force ---
+| Comment Uncomment and combine with union if SSH logs available
+| Comment index=linux_logs sourcetype=syslog "Failed password"
+| Comment | rex field=_raw "Failed password for (?:invalid user )?(?<username>\S+) from (?<src_ip>\S+)"
+| Comment | bucket _time span=5m
+| Comment | stats count AS Attempts, dc(username) AS UniqueUsers by src_ip, _time
+| Comment | where Attempts >= 20

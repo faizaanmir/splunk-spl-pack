@@ -1,0 +1,45 @@
+| Comment =========================================================
+| Title:       C2 Beaconing Detection (Regular Outbound Connections)
+| Technique:   T1071 - Application Layer Protocol (C2)
+| Data Source: Proxy logs / Firewall / Splunk Stream network data
+| Author:      Faizaan Sajjad
+| Notes:       Beaconing = regular, periodic connections at fixed intervals.
+|              Low jitter between connections is the key signature.
+|              High false positive potential — tune allowlist carefully.
+| ================================================================
+
+index=proxy_logs
+| where isnotnull(dest_ip) AND dest_ip!="0.0.0.0"
+| where NOT match(dest_ip,"^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.")
+| bucket _time span=1h
+| stats
+    count AS ConnectionCount,
+    values(_time) AS ConnectionTimes,
+    dc(src_port) AS UniqueSrcPorts,
+    sum(bytes_out) AS TotalBytesOut
+    by src_ip, dest_ip, dest_port, _time
+| where ConnectionCount >= 5
+| streamstats window=2 current=t
+    last(_time) AS PrevTime
+    by src_ip, dest_ip, dest_port
+| eval IntervalSecs=abs(_time - PrevTime)
+| stats
+    count AS Samples,
+    avg(IntervalSecs) AS AvgInterval,
+    stdev(IntervalSecs) AS StdDev,
+    min(IntervalSecs) AS MinInterval,
+    max(IntervalSecs) AS MaxInterval,
+    sum(TotalBytesOut) AS TotalBytes
+    by src_ip, dest_ip, dest_port
+| where Samples >= 5
+| eval Jitter=round(StdDev/AvgInterval*100,1)
+| where Jitter < 15
+| eval AvgInterval=round(AvgInterval,0)
+| eval AvgIntervalMin=round(AvgInterval/60,1)
+| eval BeaconSignal=case(
+    Jitter < 5,  "HIGH CONFIDENCE",
+    Jitter < 10, "MEDIUM CONFIDENCE",
+    true(),      "LOW CONFIDENCE"
+  )
+| table src_ip, dest_ip, dest_port, Samples, AvgInterval, AvgIntervalMin, Jitter, BeaconSignal, TotalBytes
+| sort Jitter

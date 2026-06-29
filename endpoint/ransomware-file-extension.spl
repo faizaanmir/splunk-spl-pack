@@ -1,0 +1,40 @@
+| Comment =========================================================
+| Title:       Ransomware File Extension Mass Change Detection
+| Technique:   T1486 - Data Encrypted for Impact
+| Data Source: Windows Security Events (4663) / Sysmon (11) / EDR logs
+| Author:      Faizaan Sajjad
+| Notes:       Ransomware renames files rapidly to encrypt them.
+|              This detects mass file renames with unknown extensions.
+|              High-value alert — tune sensitivity carefully.
+| ================================================================
+
+index=wineventlog EventCode=4663
+| where Access_Mask="0x2" OR Access_Mask="0x6"
+| rex field=Object_Name "\.(?<extension>[^.]+)$"
+| where isnotnull(extension)
+
+| Comment --- Known ransomware extensions (partial list) ---
+| eval KnownRansomwareExt=case(
+    match(lower(extension),"^(locked|encrypt|crypted|crypt|enc|ransom|wcry|wncry|wncryt|locky|zepto|odin|thor|aaa|abc|xyz|micro|cerber|ctbl|ctb2|vault|petya|ryuk|sodinokibi|revil|darkside|conti|lockbit|eking|mkos|oodt|maas|boot|werd|nbes|npsg|peet|mool)$"),
+    "KNOWN RANSOMWARE EXT", true(), "UNKNOWN"
+  )
+
+| bucket _time span=1m
+| stats
+    count AS FileChanges,
+    dc(Object_Name) AS UniqueFiles,
+    dc(extension) AS UniqueExtensions,
+    values(extension) AS Extensions,
+    values(Object_Name) AS AffectedFiles
+    by host, Account_Name, _time, KnownRansomwareExt
+| where FileChanges >= 20 OR KnownRansomwareExt="KNOWN RANSOMWARE EXT"
+| eval Severity=case(
+    KnownRansomwareExt="KNOWN RANSOMWARE EXT", "CRITICAL",
+    FileChanges >= 100, "CRITICAL",
+    FileChanges >= 50,  "HIGH",
+    FileChanges >= 20,  "MEDIUM",
+    true(),             "LOW"
+  )
+| eval _time=strftime(_time,"%Y-%m-%d %H:%M:%S")
+| table _time, host, Account_Name, FileChanges, UniqueFiles, Extensions, KnownRansomwareExt, Severity, AffectedFiles
+| sort - FileChanges

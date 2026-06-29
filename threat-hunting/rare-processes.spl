@@ -1,0 +1,40 @@
+| Comment =========================================================
+| Title:       Rare Process Execution Hunt
+| Technique:   Multiple (T1059, T1218, T1036)
+| Data Source: Windows Security Events (4688) / Sysmon (EventCode 1)
+| Author:      Faizaan Sajjad
+| Notes:       Finds processes that have run on very few hosts.
+|              Rare processes are high-value hunt targets —
+|              malware often runs once or on a small number of hosts.
+|              Run over a 7-30 day baseline for best results.
+| ================================================================
+
+index=wineventlog EventCode=4688 earliest=-30d
+| eval ProcessName=lower(mvindex(split(New_Process_Name,"\\"),-1))
+| where isnotnull(ProcessName) AND ProcessName!=""
+
+| Comment --- Exclude common noisy processes ---
+| where NOT match(ProcessName,
+    "^(svchost\.exe|lsass\.exe|csrss\.exe|wininit\.exe|services\.exe|smss\.exe|winlogon\.exe|explorer\.exe|taskhostw\.exe|sihost\.exe|RuntimeBroker\.exe|conhost\.exe|dllhost\.exe|backgroundtaskhost\.exe|spoolsv\.exe|SearchIndexer\.exe|MsMpEng\.exe|NisSrv\.exe|WmiPrvSE\.exe|TiWorker\.exe|TrustedInstaller\.exe)$"
+  )
+
+| stats
+    dc(host) AS HostCount,
+    count AS TotalExecutions,
+    values(host) AS HostsSeen,
+    values(Account_Name) AS Users,
+    values(Process_Command_Line) AS CommandLines,
+    earliest(_time) AS FirstSeen,
+    latest(_time) AS LastSeen
+    by ProcessName
+| where HostCount <= 3
+| eval FirstSeen=strftime(FirstSeen,"%Y-%m-%d %H:%M:%S")
+| eval LastSeen=strftime(LastSeen,"%Y-%m-%d %H:%M:%S")
+| eval RarityScore=case(
+    HostCount=1, "VERY RARE (1 host)",
+    HostCount=2, "RARE (2 hosts)",
+    HostCount=3, "UNCOMMON (3 hosts)",
+    true(),      "REVIEW"
+  )
+| table ProcessName, HostCount, TotalExecutions, RarityScore, HostsSeen, Users, CommandLines, FirstSeen, LastSeen
+| sort HostCount
